@@ -1,165 +1,101 @@
 import torch
-import torch.nn as nn
-import torch.optim as optim
 import torchvision
-from torchvision import datasets, transforms
-import matplotlib.pyplot as plt
+import torch.nn as nn
+import torch.nn.parallel
+import torch.backends.cudnn as cudnn
+import torch.optim as optim
+import torch.utils.data
+import torchvision.datasets as dataset
+import torchvision.transforms as transforms
+import torchvision.utils as vutils
+
 import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.animation as animation
 
-class Generator(nn.Module):
-    def __init__(self, latent_dim):
-        super(Generator, self).__init__()
 
-        self.model = nn.Sequential(
-            nn.Linear(latent_dim, 128 * 8 * 8),
+class Discriminator(nn.Module):
+    def __init__(self, input_channel, ndf):
+        super(Discriminator,self).__init__()
+
+        self.discriminator = nn.Sequential(
+                # input is (nc) x 64 x 64
+                nn.Conv2d(input_channel, ndf, 4, 2, 1, bias=False),
+                nn.LeakyReLU(0.2, inplace=True),
+                # state size. (ndf) x 32 x 32
+                nn.Conv2d(ndf, ndf * 2, 4, 2, 1, bias=False),
+                nn.BatchNorm2d(ndf * 2),
+                nn.LeakyReLU(0.2, inplace=True),
+                # state size. (ndf*2) x 16 x 16
+                nn.Conv2d(ndf * 2, ndf * 4, 4, 2, 1, bias=False),
+                nn.BatchNorm2d(ndf * 4),
+                nn.LeakyReLU(0.2, inplace=True),
+                # state size. (ndf*4) x 8 x 8
+                nn.Conv2d(ndf * 4, ndf * 8, 4, 2, 1, bias=False),
+                nn.BatchNorm2d(ndf * 8),
+                nn.LeakyReLU(0.2, inplace=True),
+                # state size. (ndf*8) x 4 x 4
+                nn.Conv2d(ndf * 8, 1, 4, 1, 0, bias=False),
+                nn.Sigmoid()
+            )
+    
+    @staticmethod
+    def linear_block(in_ftrs,out_ftrs,p):
+        return nn.Sequential(
+            nn.Linear(in_ftrs,out_ftrs),
+            nn.BatchNorm1d(out_ftrs),
             nn.ReLU(),
-            nn.Unflatten(1, (128, 8, 8)),
-            nn.Upsample(scale_factor=2),
-            nn.Conv2d(128, 128, kernel_size=3, padding=1),
-            nn.BatchNorm2d(128, momentum=0.78),
-            nn.ReLU(),
-            nn.Upsample(scale_factor=2),
-            nn.Conv2d(128, 64, kernel_size=3, padding=1),
-            nn.BatchNorm2d(64, momentum=0.78),
-            nn.ReLU(),
-            nn.Conv2d(64, 3, kernel_size=3, padding=1),
-            nn.Tanh()
+            nn.Dropout(p)
         )
 
-    def forward(self, z):
-        img = self.model(z)
-        return img
-    
-# Define the discriminator
-class Discriminator(nn.Module):
-    def __init__(self):
-        super(Discriminator, self).__init__()
-
-        self.model = nn.Sequential(
-        nn.Conv2d(3, 32, kernel_size=3, stride=2, padding=1),
-        nn.LeakyReLU(0.2),
-        nn.Dropout(0.25),
-        nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
-        nn.ZeroPad2d((0, 1, 0, 1)),
-        nn.BatchNorm2d(64, momentum=0.82),
-        nn.LeakyReLU(0.25),
-        nn.Dropout(0.25),
-        nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
-        nn.BatchNorm2d(128, momentum=0.82),
-        nn.LeakyReLU(0.2),
-        nn.Dropout(0.25),
-        nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=1),
-        nn.BatchNorm2d(256, momentum=0.8),
-        nn.LeakyReLU(0.25),
-        nn.Dropout(0.25),
-        nn.Flatten(),
-        nn.Linear(256 * 5 * 5, 1),
-        nn.Sigmoid()
-    )
-
-    def forward(self, img):
-        validity = self.model(img)
-        return validity
-    
-def main():
-    # Set device
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-    transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
-    ])
-
-    train_dataset = datasets.CIFAR10(root='./data',\
-              train=True, download=True, transform=transform)
-    
-    dataloader = torch.utils.data.DataLoader(train_dataset, \
-                                    batch_size=32, shuffle=True)
-    
-    # Hyperparameters
-    latent_dim = 100
-    lr = 0.0002
-    beta1 = 0.5
-    beta2 = 0.999
-    num_epochs = 10
-
-    generator = Generator(latent_dim).to(device)
-    discriminator = Discriminator().to(device)
-    # Loss function
-    adversarial_loss = nn.BCELoss()
-    # Optimizers
-    optimizer_G = optim.Adam(generator.parameters()\
-                            , lr=lr, betas=(beta1, beta2))
-    optimizer_D = optim.Adam(discriminator.parameters()\
-                            , lr=lr, betas=(beta1, beta2))
-    
-    for epoch in range(num_epochs):
-        for i, batch in enumerate(dataloader):
-        # Convert list to tensor
-            real_images = batch[0].to(device) 
-            # Adversarial ground truths
-            valid = torch.ones(real_images.size(0), 1, device=device)
-            fake = torch.zeros(real_images.size(0), 1, device=device)
-            # Configure input
-            real_images = real_images.to(device)
-
-            # ---------------------
-            #  Train Discriminator
-            # ---------------------
-            optimizer_D.zero_grad()
-            # Sample noise as generator input
-            z = torch.randn(real_images.size(0), latent_dim, device=device)
-            # Generate a batch of images
-            fake_images = generator(z)
-
-            # Measure discriminator's ability 
-            # to classify real and fake images
-            real_loss = adversarial_loss(discriminator\
-                                        (real_images), valid)
-            fake_loss = adversarial_loss(discriminator\
-                                        (fake_images.detach()), fake)
-            d_loss = (real_loss + fake_loss) / 2
-            # Backward pass and optimize
-            d_loss.backward()
-            optimizer_D.step()
-
-            # -----------------
-            #  Train Generator
-            # -----------------
-
-            optimizer_G.zero_grad()
-            # Generate a batch of images
-            gen_images = generator(z)
-            # Adversarial loss
-            g_loss = adversarial_loss(discriminator(gen_images), valid)
-            # Backward pass and optimize
-            g_loss.backward()
-            optimizer_G.step()
-            # ---------------------
-            #  Progress Monitoring
-            # ---------------------
-            if (i + 1) % 100 == 0:
-                print(
-                    f"Epoch [{epoch+1}/{num_epochs}]\
-                            Batch {i+1}/{len(dataloader)} "
-                    f"Discriminator Loss: {d_loss.item():.4f} "
-                    f"Generator Loss: {g_loss.item():.4f}"
-                )
-        # Save generated images for every epoch
-        if (epoch + 1) % 10 == 0:
-            with torch.no_grad():
-                z = torch.randn(16, latent_dim, device=device)
-                generated = generator(z).detach().cpu()
-                grid = torchvision.utils.make_grid(generated,\
-                                            nrow=4, normalize=True)
-                plt.imshow(np.transpose(grid, (1, 2, 0)))
-                plt.axis("off")
-                plt.show()
+        
+    def forward(self,inp):
+        return self.discriminator(inp)
 
 
-if __name__ == "__main__":
-    main()
+class Generator(nn.Module):
+    def __init__(self, latent_space, ngf, input_channel):
+        
+        super(Generator,self).__init__()
+        
+        self.generator = nn.Sequential(
+                # input is Z, going into a convolution
+                nn.ConvTranspose2d( latent_space, 1024, 4, 1, 0, bias=False),
+                nn.BatchNorm2d(1024),
+                nn.ReLU(True),
+                # state size. (ngf*8) x 4 x 4
+                nn.ConvTranspose2d(1024, 512, 4, 2, 1, bias=False),
+                nn.BatchNorm2d(512),
+                nn.ReLU(True),
+                # state size. (ngf*4) x 8 x 8
+                nn.ConvTranspose2d(512, 256, 4, 2, 1, bias=False),
+                nn.BatchNorm2d(256),
+                nn.ReLU(True),
+                # state size. (ngf*2) x 16 x 16
+                nn.ConvTranspose2d(256, 128, 4, 2, 1, bias=False),
+                nn.BatchNorm2d(128),
+                nn.ReLU(True),
+                # state size. (ngf) x 32 x 32
+                nn.ConvTranspose2d(128, 64, 4, 2, 1, bias=False),
+                nn.BatchNorm2d(64),
+                nn.ReLU(True),
+
+                # state size. (ngf) x 64 x 64
+                nn.ConvTranspose2d(64, 32, 4, 2, 1, bias=False),
+                nn.BatchNorm2d(32),
+                nn.ReLU(True),
 
 
+                # state size. (ngf) x 128 x 128
+                nn.ConvTranspose2d(32, 16, 4, 2, 1, bias=False),
+                nn.BatchNorm2d(16),
+                nn.ReLU(True),
 
+                # state size. (ngf) x 256 x 256
+                nn.ConvTranspose2d(16, input_channel, 4, 2, 1, bias=False),
+                nn.Tanh()
+                # state size. input_channel x 512 x 512
+            )
 
+    def forward(self,inp):
+        return self.generator(inp)
